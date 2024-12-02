@@ -1,85 +1,111 @@
-use anyhow::Result;
-use rss::Channel;
-use serde::{Deserialize, Serialize};
-use urlencoding::encode;
+use dotenv::dotenv;
+use futures::future::join_all;
+use html_escape::decode_html_entities;
+use rand::seq::SliceRandom;
+use regex::Regex;
+use reqwest::{
+    header::{HeaderMap, HeaderValue},
+    Error,
+};
+use serde::Deserialize;
+use std::env;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct NewsItem {
-    title: String,
+    description: String,
     link: String,
-    pub_date: String,
-    source: Option<String>,
-    description: Option<String>,
+    #[serde(default)]
+    originallink: String,
+    pubDate: String,
+    title: String,
 }
 
-struct GoogleNewsReader {
-    client: reqwest::Client,
+#[derive(Debug, Deserialize)]
+struct NewsResponse {
+    total: i32,
+    start: i32,
+    display: i32,
+    items: Vec<NewsItem>,
 }
 
-impl GoogleNewsReader {
-    fn new() -> Self {
-        GoogleNewsReader {
-            client: reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                .build()
-                .unwrap(),
-        }
-    }
+fn remove_html_tags(text: &str) -> String {
+    // HTML 태그 제거
+    let re = Regex::new(r"<[^>]*>").unwrap();
+    let text_without_tags = re.replace_all(text, "");
 
-    fn build_url(&self, query: Option<&str>) -> String {
-        let base_url = "https://news.google.com/rss";
-        match query {
-            Some(q) => format!("{}/search?q={}&hl=ko&gl=KR&ceid=KR:ko", base_url, encode(q)),
-            None => format!("{}?hl=ko&gl=KR&ceid=KR:ko", base_url),
-        }
-    }
+    // HTML 엔티티 디코딩
+    decode_html_entities(&text_without_tags).into_owned()
+}
 
-    async fn fetch_news(&self, query: Option<&str>) -> Result<Vec<NewsItem>> {
-        let url = self.build_url(query);
-        println!("Fetching news from: {}", url);
-
-        let content = self.client.get(&url).send().await?.bytes().await?;
-
-        let channel = Channel::read_from(&content[..])?;
-
-        let items: Vec<NewsItem> = channel
-            .items()
-            .iter()
-            .map(|item| NewsItem {
-                title: item.title().unwrap_or("").to_string(),
-                link: item.link().unwrap_or("").to_string(),
-                pub_date: item.pub_date().unwrap_or("").to_string(),
-                source: item.source().map(|s| s.title().unwrap_or("").to_string()),
-                description: item.description().map(String::from),
-            })
-            .collect();
-
-        Ok(items)
-    }
+async fn fetch_news(
+    client: &reqwest::Client,
+    headers: &HeaderMap,
+    keyword: &str,
+) -> Result<NewsResponse, Error> {
+    client
+        .get("https://openapi.naver.com/v1/search/news.json")
+        .headers(headers.clone())
+        .query(&[("query", keyword), ("display", "15"), ("sort", "date")])
+        .send()
+        .await?
+        .json()
+        .await
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let reader = GoogleNewsReader::new();
+async fn main() -> Result<(), Error> {
+    dotenv().ok(); // .env 파일 로드
+    let client_id = env::var("NAVER_CLIENT_ID").expect("NAVER_CLIENT_ID not set");
+    let client_secret = env::var("NAVER_CLIENT_SECRET").expect("NAVER_CLIENT_SECRET not set");
 
-    // 특정 키워드로 검색
-    let keyword = "해운";
-    println!("\n{} 관련 뉴스:", keyword);
-    let search_news = reader.fetch_news(Some(keyword)).await?;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-Naver-Client-Id",
+        HeaderValue::from_str(&client_id).unwrap(),
+    );
+    headers.insert(
+        "X-Naver-Client-Secret",
+        HeaderValue::from_str(&client_secret).unwrap(),
+    );
 
-    // 결과 출력
-    for item in search_news {
-        println!("\n제목: {}", item.title);
-        if let Some(source) = item.source {
-            println!("출처: {}", source);
+    let keywords = vec![
+        "해운",
+        "선박",
+        "컨테이너",
+        "무역",
+        "선적",
+        "물류",
+        "수출",
+        "해양 운수",
+        "중고차",
+    ];
+    let client = reqwest::Client::new();
+
+    let futures: Vec<_> = keywords
+        .iter()
+        .map(|keyword| fetch_news(&client, &headers, keyword))
+        .collect();
+
+    let results = join_all(futures).await;
+
+    let mut all_news: Vec<NewsItem> = Vec::new();
+    for result in results {
+        if let Ok(response) = result {
+            all_news.extend(response.items);
         }
-        println!("링크: {}", item.link);
-        println!("날짜: {}", item.pub_date);
-        if let Some(desc) = item.description {
-            println!("설명: {}", desc);
-        }
-        println!("-------------------");
     }
 
+    const NEWS_COUNT: usize = 20;
+
+    let selected = all_news
+        .choose_multiple(&mut rand::thread_rng(), NEWS_COUNT)
+        .collect::<Vec<_>>();
+
+    println!("\n무작위로 선택된 {}개의 뉴스:", NEWS_COUNT);
+    println!("----------------------------------------");
+    for item in selected {
+        println!("- {}\n{}\n", remove_html_tags(&item.title), item.link);
+    }
+    println!("----------------------------------------");
     Ok(())
 }
