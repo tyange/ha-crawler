@@ -45,7 +45,7 @@ async fn fetch_news(
     client
         .get("https://openapi.naver.com/v1/search/news.json")
         .headers(headers.clone())
-        .query(&[("query", keyword), ("display", "15"), ("sort", "date")])
+        .query(&[("query", keyword), ("display", "5"), ("sort", "date")])
         .send()
         .await?
         .json()
@@ -68,19 +68,10 @@ async fn main() -> Result<(), Error> {
         HeaderValue::from_str(&client_secret).unwrap(),
     );
 
-    let keywords = vec![
-        "해운",
-        "선박",
-        "컨테이너",
-        "무역",
-        "선적",
-        "물류",
-        "수출",
-        "해양 운수",
-        "중고차",
-    ];
+    let keywords = vec!["해운", "선박", "컨테이너", "무역", "선적", "물류", "수출"];
     let client = reqwest::Client::new();
 
+    // 모든 키워드에 대한 API 요청을 동시에 실행
     let futures: Vec<_> = keywords
         .iter()
         .map(|keyword| fetch_news(&client, &headers, keyword))
@@ -88,24 +79,20 @@ async fn main() -> Result<(), Error> {
 
     let results = join_all(futures).await;
 
-    let mut all_news: Vec<NewsItem> = Vec::new();
-    for result in results {
-        if let Ok(response) = result {
-            all_news.extend(response.items);
+    // 각 키워드별 결과 출력
+    for (keyword, result) in keywords.iter().zip(results) {
+        match result {
+            Ok(response) => {
+                println!("\n검색어: {}", keyword);
+                println!("----------------------------------------");
+                for item in response.items {
+                    println!("-{}\n{}", remove_html_tags(&item.title), item.link);
+                }
+                println!("----------------------------------------");
+            }
+            Err(e) => println!("키워드 '{}' 검색 중 오류 발생: {}", keyword, e),
         }
     }
 
-    const NEWS_COUNT: usize = 20;
-
-    let selected = all_news
-        .choose_multiple(&mut rand::thread_rng(), NEWS_COUNT)
-        .collect::<Vec<_>>();
-
-    println!("\n무작위로 선택된 {}개의 뉴스:", NEWS_COUNT);
-    println!("----------------------------------------");
-    for item in selected {
-        println!("- {}\n{}\n", remove_html_tags(&item.title), item.link);
-    }
-    println!("----------------------------------------");
     Ok(())
 }
