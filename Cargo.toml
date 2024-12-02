@@ -9,6 +9,5 @@ reqwest = { version = "0.12.9", features = ["json"] }
 serde = { version = "1.0.215", features = ["derive"] }
 tokio = { version = "1.41.1", features = ["macros", "rt-multi-thread"] }
 futures = "0.3"
-rand = "0.8.5"
 html-escape = "0.2.13"
 dotenv = "0.15.0"

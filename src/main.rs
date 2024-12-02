@@ -1,7 +1,6 @@
 use dotenv::dotenv;
 use futures::future::join_all;
 use html_escape::decode_html_entities;
-use rand::seq::SliceRandom;
 use regex::Regex;
 use reqwest::{
     header::{HeaderMap, HeaderValue},
